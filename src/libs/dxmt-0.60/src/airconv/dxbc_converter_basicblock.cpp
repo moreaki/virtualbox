@@ -20,6 +20,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 #include <stack>
@@ -27,6 +28,44 @@
 char dxmt::UnsupportedFeature::ID;
 
 namespace dxmt::dxbc {
+
+static constexpr int kMaskedShuffleElem = -1;
+
+static llvm::Type *
+get_typed_pointer_element_type(llvm::Value *ptr) {
+#if LLVM_VERSION_MAJOR <= 15
+  auto *ptr_type = llvm::dyn_cast<llvm::PointerType>(ptr->getType()->getScalarType());
+  if (ptr_type && !ptr_type->isOpaque())
+    return ptr_type->getPointerElementType();
+#endif
+  return nullptr;
+}
+
+static pvalue
+create_vec_array_element_gep(llvm::IRBuilder<> &builder, llvm::Value *array, llvm::Type *vec_type, pvalue index) {
+  if (auto *element_type = get_typed_pointer_element_type(array)) {
+    if (llvm::isa<llvm::ArrayType>(element_type))
+      return builder.CreateGEP(element_type, array, {builder.getInt32(0), index});
+  }
+  return builder.CreateGEP(vec_type, array, {index});
+}
+
+static pvalue
+create_vec_array_component_gep(
+  llvm::IRBuilder<> &builder, llvm::Value *array, llvm::Type *vec_type,
+  pvalue index, unsigned component
+) {
+  if (auto *element_type = get_typed_pointer_element_type(array)) {
+    if (llvm::isa<llvm::ArrayType>(element_type))
+      return builder.CreateGEP(
+        element_type, array, {builder.getInt32(0), index, builder.getInt32(component)}
+      );
+  }
+  return builder.CreateGEP(
+    llvm::ArrayType::get(vec_type, 1),
+    array, {builder.getInt32(0), index, builder.getInt32(component)}
+  );
+}
 
 template <typename T = std::monostate>
 ReaderIO<context, T> throwUnsupported(llvm::StringRef ref) {
@@ -345,7 +384,7 @@ auto to_desired_type_from_int_vec4(pvalue vec4, llvm::Type *desired, uint32_t ma
     std::function<pvalue(pvalue, llvm::Type *)> convert =
       [&ctx, &convert, mask](pvalue vec4, llvm::Type *desired) {
         auto masked = [mask](int i) {
-          return (mask & (1 << i)) ? i : llvm::UndefMaskElem;
+          return (mask & (1 << i)) ? i : kMaskedShuffleElem;
         };
         if (desired == ctx.types._int4)
           return ctx.builder.CreateShuffleVector(
@@ -456,35 +495,26 @@ auto cmp_float(llvm::CmpInst::Predicate cmp, pvalue a, pvalue b) {
   });
 };
 
-auto load_from_array_at(llvm::Value *array, pvalue index) -> IRValue {
+auto load_from_array_at(llvm::Value *array, llvm::Type *vec_type, pvalue index) -> IRValue {
   return make_irvalue([=](context ctx) {
-    auto array_ty = llvm::cast<llvm::ArrayType>( // force line break
-      llvm::cast<llvm::PointerType>(array->getType())
-        ->getNonOpaquePointerElementType()
-    );
-    auto ptr = ctx.builder.CreateGEP(
-      array_ty, array, {ctx.builder.getInt32(0), index}, "",
-      llvm::isa<llvm::ConstantInt>(index)
-    );
-    return ctx.builder.CreateLoad(array_ty->getElementType(), ptr);
+    auto ptr = create_vec_array_element_gep(ctx.builder, array, vec_type, index);
+    return ctx.builder.CreateLoad(vec_type, ptr);
   });
 };
 
 IRValue
-load_from_vec4_array_masked(llvm::Value *array, pvalue index, uint32_t mask) {
+load_from_vec4_array_masked(llvm::Value *array, llvm::Type *vec4_type, pvalue index, uint32_t mask) {
   if (mask == 0b1111) {
-    return load_from_array_at(array, index);
+    return load_from_array_at(array, vec4_type, index);
   }
   return make_irvalue([=](context ctx) {
-    auto array_type = llvm::cast<llvm::PointerType>(array->getType())->getNonOpaquePointerElementType();
-    auto vec4_type = llvm::cast<llvm::ArrayType>(array_type)->getArrayElementType();
+    auto array_type = llvm::ArrayType::get(vec4_type, 1);
     auto ele_type = llvm::cast<llvm::VectorType>(vec4_type)->getElementType();
     pvalue value = llvm::ConstantAggregateZero::get(vec4_type);
     for (unsigned i = 0; i < 4; i++) {
       if ((mask & (1 << i)) == 0)
         continue;
-      auto component_ptr =
-          ctx.builder.CreateGEP(array_type, array, {ctx.builder.getInt32(0), index, ctx.builder.getInt32(i)});
+      auto component_ptr = create_vec_array_component_gep(ctx.builder, array, vec4_type, index, i);
       value = ctx.builder.CreateInsertElement(value, ctx.builder.CreateLoad(ele_type, component_ptr), uint64_t(i));
     }
     return value;
@@ -495,11 +525,7 @@ auto store_to_array_at(
   llvm::Value *array, pvalue index, pvalue vec4_type_matched
 ) -> IREffect {
   return make_effect([=](context ctx) {
-    auto ptr = ctx.builder.CreateInBoundsGEP(
-      llvm::cast<llvm::PointerType>(array->getType())
-        ->getNonOpaquePointerElementType(),
-      array, {ctx.builder.getInt32(0), index}
-    );
+    auto ptr = create_vec_array_element_gep(ctx.builder, array, vec4_type_matched->getType(), index);
     ctx.builder.CreateStore(vec4_type_matched, ptr);
     return std::monostate();
   });
@@ -516,11 +542,7 @@ IREffect store_at_vec4_array_masked(
       for (unsigned i = 0; i < 4; i++) {
         if ((mask & (1 << i)) == 0)
           continue;
-        auto component_ptr =  ctx.builder.CreateGEP(
-          llvm::cast<llvm::PointerType>(array->getType())
-            ->getNonOpaquePointerElementType(),
-          array, {ctx.builder.getInt32(0), index, ctx.builder.getInt32(i)}
-        );
+        auto component_ptr = create_vec_array_component_gep(ctx.builder, array, vec4->getType(), index, i);
         ctx.builder.CreateStore(
           ctx.builder.CreateExtractElement(vec4, i), component_ptr
         );
@@ -531,22 +553,14 @@ IREffect store_at_vec4_array_masked(
 };
 
 auto store_at_vec_array_masked(
-  llvm::Value *array, pvalue index, pvalue maybe_vec4, uint32_t mask
+  llvm::Value *array, llvm::Type *vec_type, pvalue index, pvalue maybe_vec4, uint32_t mask
 ) -> IREffect {
-  auto array_ty = llvm::cast<llvm::ArrayType>( // force line break
-    llvm::cast<llvm::PointerType>(array->getType())
-      ->getNonOpaquePointerElementType()
-  );
-  auto components =
-    cast<llvm::FixedVectorType>(array_ty->getElementType())->getNumElements();
+  auto components = cast<llvm::FixedVectorType>(vec_type)->getNumElements();
   return make_effect([=](context ctx) {
     for (unsigned i = 0; i < components; i++) {
       if ((mask & (1 << i)) == 0)
         continue;
-      auto component_ptr = ctx.builder.CreateGEP(
-        array_ty,
-        array, {ctx.builder.getInt32(0), index, ctx.builder.getInt32(i)}
-      );
+      auto component_ptr = create_vec_array_component_gep(ctx.builder, array, vec_type, index, i);
       ctx.builder.CreateStore(
         ctx.builder.CreateExtractElement(maybe_vec4, i), component_ptr
       );
@@ -647,7 +661,7 @@ pop_output_reg(uint32_t from_reg, uint32_t mask, uint32_t to_element) {
       auto const_index =
         llvm::ConstantInt::get(ctx.llvm, llvm::APInt{32, from_reg, false});
       return load_from_array_at(
-               ctx.resource.output.ptr_int4, const_index
+               ctx.resource.output.ptr_int4, ctx.types._int4, const_index
              ) >>= [=, &ctx](auto ivec4) {
         auto desired_type =
           ctx.function->getReturnType()->getStructElementType(to_element);
@@ -664,7 +678,7 @@ std::function<IRValue(pvalue)> pop_output_reg_fix_unorm(uint32_t from_reg, uint3
   return [=](pvalue ret) {
     return make_irvalue_bind([=](context ctx) -> IRValue {
       auto const_index = llvm::ConstantInt::get(ctx.llvm, llvm::APInt{32, from_reg, false});
-      auto fvec4 = co_yield load_from_array_at(ctx.resource.output.ptr_float4, const_index);
+      auto fvec4 = co_yield load_from_array_at(ctx.resource.output.ptr_float4, ctx.types._float4, const_index);
       auto fixed = ctx.builder.CreateFSub(fvec4, co_yield get_float4_splat(1.0f / 127500.0f) /* magic delta ?! */);
       co_return ctx.builder.CreateInsertValue(ret, fixed, {to_element});
     });
@@ -686,10 +700,7 @@ IREffect init_tess_factor_patch_constant(uint32_t to_reg, uint32_t mask, uint32_
       air::Sign::with_sign /* intended */
     );
     auto array = ctx.resource.patch_constant_output.ptr_float4;
-    auto array_ty = llvm::cast<llvm::ArrayType>( // force line break
-      llvm::cast<llvm::PointerType>(array->getType())
-        ->getNonOpaquePointerElementType()
-    );
+    auto array_ty = llvm::ArrayType::get(ctx.types._float4, 1);
     auto component_ptr = ctx.builder.CreateGEP(
       array_ty, array,
       {ctx.builder.getInt32(0), ctx.builder.getInt32(to_reg),
@@ -706,10 +717,7 @@ std::function<IRValue(pvalue)> pop_output_tess_factor(
   return [=](pvalue ret) -> IRValue {
     auto ctx = co_yield get_context();
     auto array = ctx.resource.patch_constant_output.ptr_float4;
-    auto array_ty = llvm::cast<llvm::ArrayType>( // force line break
-      llvm::cast<llvm::PointerType>(array->getType())
-        ->getNonOpaquePointerElementType()
-    );
+    auto array_ty = llvm::ArrayType::get(ctx.types._float4, 1);
     auto component_ptr = ctx.builder.CreateGEP(
       array_ty, array,
       {ctx.builder.getInt32(0), ctx.builder.getInt32(from_reg),
@@ -736,7 +744,7 @@ IREffect
 pop_mesh_output_render_taget_array_index(uint32_t from_reg, uint32_t mask, pvalue primitive_id) {
   auto ctx = co_yield get_context();
   auto result = co_yield to_desired_type_from_int_vec4(
-      co_yield load_from_array_at(ctx.resource.output.ptr_int4, ctx.builder.getInt32(from_reg)), ctx.types._int, mask
+      co_yield load_from_array_at(ctx.resource.output.ptr_int4, ctx.types._int4, ctx.builder.getInt32(from_reg)), ctx.types._int, mask
   );
   co_yield air::call_set_mesh_render_target_array_index(ctx.resource.mesh, primitive_id, result);
   co_return {};
@@ -746,7 +754,7 @@ IREffect
 pop_mesh_output_viewport_array_index(uint32_t from_reg, uint32_t mask, pvalue primitive_id) {
   auto ctx = co_yield get_context();
   auto result = co_yield to_desired_type_from_int_vec4(
-      co_yield load_from_array_at(ctx.resource.output.ptr_int4, ctx.builder.getInt32(from_reg)), ctx.types._int, mask
+      co_yield load_from_array_at(ctx.resource.output.ptr_int4, ctx.types._int4, ctx.builder.getInt32(from_reg)), ctx.types._int, mask
   );
   co_yield air::call_set_mesh_viewport_array_index(ctx.resource.mesh, primitive_id, result);
   co_return {};
@@ -755,7 +763,7 @@ pop_mesh_output_viewport_array_index(uint32_t from_reg, uint32_t mask, pvalue pr
 IREffect
 pop_mesh_output_position(uint32_t from_reg, uint32_t mask, pvalue vertex_id) {
   auto ctx = co_yield get_context();
-  auto result = co_yield load_from_array_at(ctx.resource.output.ptr_float4, ctx.builder.getInt32(from_reg));
+  auto result = co_yield load_from_array_at(ctx.resource.output.ptr_float4, ctx.types._float4, ctx.builder.getInt32(from_reg));
   co_yield air::call_set_mesh_position(ctx.resource.mesh, vertex_id, result);
   co_return {};
 }
@@ -766,7 +774,7 @@ pop_mesh_output_vertex_data(
 ) {
   auto ctx = co_yield get_context();
   auto result = co_yield to_desired_type_from_int_vec4(
-      co_yield load_from_vec4_array_masked(ctx.resource.output.ptr_int4, ctx.builder.getInt32(from_reg), mask),
+      co_yield load_from_vec4_array_masked(ctx.resource.output.ptr_int4, ctx.types._int4, ctx.builder.getInt32(from_reg), mask),
       air::get_llvm_type(desired_type, ctx.llvm), mask
   );
   co_yield air::call_set_mesh_vertex_data(ctx.resource.mesh, idx, vertex_id, result);
@@ -1090,7 +1098,7 @@ auto load_operand_index(OperandIndex idx) {
             reg = ctx.resource.phases[ot.phase].temp.ptr_int4;
           }
           auto temp =
-            load_from_array_at(reg, ctx.builder.getInt32(ot.regid)).build(ctx);
+            load_from_array_at(reg, ctx.types._int4, ctx.builder.getInt32(ot.regid)).build(ctx);
           if (auto err = temp.takeError()) {
             return std::move(err);
           }
@@ -1163,7 +1171,7 @@ IRValue load_src<SrcOperandImmediateConstantBuffer, false>(
 ) {
   auto ctx = co_yield get_context();
   auto vec = co_yield load_from_array_at(
-    ctx.resource.icb, co_yield load_operand_index(cb.regindex)
+    ctx.resource.icb, ctx.types._int4, co_yield load_operand_index(cb.regindex)
   );
   co_return vec;
 };
@@ -1174,7 +1182,7 @@ IRValue load_src<SrcOperandImmediateConstantBuffer, true>(
 ) {
   auto ctx = co_yield get_context();
   auto vec = co_yield load_from_array_at(
-    ctx.resource.icb_float, co_yield load_operand_index(cb.regindex)
+    ctx.resource.icb_float, ctx.types._float4, co_yield load_operand_index(cb.regindex)
   );
   co_return vec;
 };
@@ -1198,7 +1206,7 @@ IRValue load_src<SrcOperandInputOCP, true>(SrcOperandInputOCP input_ocp) {
 
   auto ctx = co_yield get_context();
   co_return co_yield load_from_array_at(
-    ctx.resource.output.ptr_float4,
+    ctx.resource.output.ptr_float4, ctx.types._float4,
     ctx.builder.CreateAdd(
       ctx.builder.CreateMul(
         co_yield load_operand_index(input_ocp.cpid),
@@ -1214,7 +1222,7 @@ IRValue load_src<SrcOperandInputOCP, false>(SrcOperandInputOCP input_ocp) {
 
   auto ctx = co_yield get_context();
   co_return co_yield load_from_array_at(
-    ctx.resource.output.ptr_int4,
+    ctx.resource.output.ptr_int4, ctx.types._int4,
     ctx.builder.CreateAdd(
       ctx.builder.CreateMul(
         co_yield load_operand_index(input_ocp.cpid),
@@ -1230,7 +1238,7 @@ IRValue load_src<SrcOperandInputICP, true>(SrcOperandInputICP input2d) {
   auto ctx = co_yield get_context();
   /* applies to both hull and domain shader */
   co_return co_yield load_from_array_at(
-    ctx.resource.input.ptr_float4,
+    ctx.resource.input.ptr_float4, ctx.types._float4,
     ctx.builder.CreateAdd(
       ctx.builder.CreateMul(
         co_yield load_operand_index(input2d.cpid),
@@ -1246,7 +1254,7 @@ IRValue load_src<SrcOperandInputICP, false>(SrcOperandInputICP input2d) {
   auto ctx = co_yield get_context();
   /* applies to both hull and domain shader */
   co_return co_yield load_from_array_at(
-    ctx.resource.input.ptr_int4,
+    ctx.resource.input.ptr_int4, ctx.types._int4,
     ctx.builder.CreateAdd(
       ctx.builder.CreateMul(
         co_yield load_operand_index(input2d.cpid),
@@ -1262,7 +1270,7 @@ IRValue load_src<SrcOperandInputPC, true>(SrcOperandInputPC input_patch_constant
 ) {
   auto ctx = co_yield get_context();
   co_return co_yield load_from_array_at(
-    ctx.resource.patch_constant_output.ptr_float4,
+    ctx.resource.patch_constant_output.ptr_float4, ctx.types._float4,
     co_yield load_operand_index(input_patch_constant.regindex)
   );
 };
@@ -1272,7 +1280,7 @@ IRValue load_src<SrcOperandInputPC, false>(SrcOperandInputPC input_patch_constan
 ) {
   auto ctx = co_yield get_context();
   co_return co_yield load_from_array_at(
-    ctx.resource.patch_constant_output.ptr_int4,
+    ctx.resource.patch_constant_output.ptr_int4, ctx.types._int4,
     co_yield load_operand_index(input_patch_constant.regindex)
   );
 };
@@ -1282,12 +1290,12 @@ template <> IRValue load_src<SrcOperandTemp, true>(SrcOperandTemp temp) {
   if (temp.phase != ~0u) {
     assert(temp.phase < ctx.resource.phases.size());
     co_return co_yield load_from_array_at(
-      ctx.resource.phases[temp.phase].temp.ptr_float4,
+      ctx.resource.phases[temp.phase].temp.ptr_float4, ctx.types._float4,
       ctx.builder.getInt32(temp.regid)
     );
   }
   co_return co_yield load_from_array_at(
-    ctx.resource.temp.ptr_float4, ctx.builder.getInt32(temp.regid)
+    ctx.resource.temp.ptr_float4, ctx.types._float4, ctx.builder.getInt32(temp.regid)
   );
 };
 
@@ -1296,12 +1304,12 @@ template <> IRValue load_src<SrcOperandTemp, false>(SrcOperandTemp temp) {
   if (temp.phase != ~0u) {
     assert(temp.phase < ctx.resource.phases.size());
     co_return co_yield load_from_array_at(
-      ctx.resource.phases[temp.phase].temp.ptr_int4,
+      ctx.resource.phases[temp.phase].temp.ptr_int4, ctx.types._int4,
       ctx.builder.getInt32(temp.regid)
     );
   }
   co_return co_yield load_from_array_at(
-    ctx.resource.temp.ptr_int4, ctx.builder.getInt32(temp.regid)
+    ctx.resource.temp.ptr_int4, ctx.types._int4, ctx.builder.getInt32(temp.regid)
   );
 };
 
@@ -1317,7 +1325,9 @@ IRValue load_src<SrcOperandIndexableTemp, true>(SrcOperandIndexableTemp itemp) {
     regfile = ctx.resource.indexable_temp_map[itemp.regfile];
   }
   auto s = co_yield load_from_array_at(
-    regfile.ptr_float_vec, co_yield load_operand_index(itemp.regindex)
+    regfile.ptr_float_vec,
+    llvm::FixedVectorType::get(ctx.types._float, regfile.vec_size),
+    co_yield load_operand_index(itemp.regindex)
   );
   co_return co_yield extend_to_vec4(s);
 };
@@ -1335,7 +1345,9 @@ IRValue load_src<SrcOperandIndexableTemp, false>(SrcOperandIndexableTemp itemp
     regfile = ctx.resource.indexable_temp_map[itemp.regfile];
   }
   auto s = co_yield load_from_array_at(
-    regfile.ptr_int_vec, co_yield load_operand_index(itemp.regindex)
+    regfile.ptr_int_vec,
+    llvm::FixedVectorType::get(ctx.types._int, regfile.vec_size),
+    co_yield load_operand_index(itemp.regindex)
   );
   co_return co_yield extend_to_vec4(s);
 };
@@ -1343,7 +1355,7 @@ IRValue load_src<SrcOperandIndexableTemp, false>(SrcOperandIndexableTemp itemp
 template <> IRValue load_src<SrcOperandInput, true>(SrcOperandInput input) {
   auto ctx = co_yield get_context();
   auto s = co_yield load_from_array_at(
-    ctx.resource.input.ptr_float4, ctx.builder.getInt32(input.regid)
+    ctx.resource.input.ptr_float4, ctx.types._float4, ctx.builder.getInt32(input.regid)
   );
   co_return s;
 };
@@ -1351,7 +1363,7 @@ template <> IRValue load_src<SrcOperandInput, true>(SrcOperandInput input) {
 template <> IRValue load_src<SrcOperandInput, false>(SrcOperandInput input) {
   auto ctx = co_yield get_context();
   auto s = co_yield load_from_array_at(
-    ctx.resource.input.ptr_int4, ctx.builder.getInt32(input.regid)
+    ctx.resource.input.ptr_int4, ctx.types._int4, ctx.builder.getInt32(input.regid)
   );
   co_return s;
 };
@@ -1361,7 +1373,7 @@ IRValue load_src<SrcOperandIndexableInput, true>(SrcOperandIndexableInput input
 ) {
   auto ctx = co_yield get_context();
   auto s = co_yield load_from_array_at(
-    ctx.resource.input.ptr_float4, co_yield load_operand_index(input.regindex)
+    ctx.resource.input.ptr_float4, ctx.types._float4, co_yield load_operand_index(input.regindex)
   );
   co_return co_yield extend_to_vec4(s);
 };
@@ -1371,7 +1383,7 @@ IRValue load_src<SrcOperandIndexableInput, false>(SrcOperandIndexableInput input
 ) {
   auto ctx = co_yield get_context();
   auto s = co_yield load_from_array_at(
-    ctx.resource.input.ptr_int4, co_yield load_operand_index(input.regindex)
+    ctx.resource.input.ptr_int4, ctx.types._int4, co_yield load_operand_index(input.regindex)
   );
   co_return co_yield extend_to_vec4(s);
 };
@@ -1540,7 +1552,7 @@ auto recover_mask(uint32_t mask) {
           assert(0 && "invalid mask");
         }
       }
-      int p = llvm::UndefMaskElem;
+      int p = kMaskedShuffleElem;
       switch (mask) {
       case 0b1000:
         return ctx.builder.CreateShuffleVector(value, {p, p, p, 0});
@@ -1683,7 +1695,9 @@ IREffect store_dst<DstOperandIndexableTemp, false>(
         regfile = ctx.resource.indexable_temp_map[itemp.regfile];
       }
       co_return co_yield store_at_vec_array_masked(
-        regfile.ptr_int_vec, co_yield load_operand_index(itemp.regindex),
+        regfile.ptr_int_vec,
+        llvm::FixedVectorType::get(ctx.types._int, regfile.vec_size),
+        co_yield load_operand_index(itemp.regindex),
         co_yield std::move(value), itemp._.mask
       );
     }
@@ -1706,7 +1720,9 @@ IREffect store_dst<DstOperandIndexableTemp, true>(
         regfile = ctx.resource.indexable_temp_map[itemp.regfile];
       }
       co_return co_yield store_at_vec_array_masked(
-        regfile.ptr_float_vec, co_yield load_operand_index(itemp.regindex),
+        regfile.ptr_float_vec,
+        llvm::FixedVectorType::get(ctx.types._float, regfile.vec_size),
+        co_yield load_operand_index(itemp.regindex),
         co_yield std::move(value), itemp._.mask
       );
     }
@@ -2032,8 +2048,7 @@ auto store_tgsm(
   auto ctx = co_yield get_context();
   for (uint32_t i = 0; i < written_components; i++) {
     auto ptr = ctx.builder.CreateInBoundsGEP(
-      llvm::cast<llvm::PointerType>(g->getType())
-        ->getNonOpaquePointerElementType(),
+      llvm::cast<llvm::GlobalVariable>(g)->getValueType(),
       g,
       {ctx.builder.getInt32(0),
        ctx.builder.CreateAdd(offset_in_4bytes, ctx.builder.getInt32(i))}

@@ -45,6 +45,45 @@ VBOX_PATH_DXMT := $(PATH_SUB_CURRENT)
 # The LLVM static libraries required for DXMT
 #
 VBOX_LLVM_PATH ?= $(lastword $(sort $(wildcard $(KBUILD_DEVTOOLS_TRG)/llvm/v*)))
+VBOX_LLVM_COMPONENT_LIBS = \
+	$(VBOX_LLVM_PATH)/lib/libLLVMPasses$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMTarget$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMObjCARCOpts$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMCoroutines$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMipo$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMInstrumentation$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMVectorize$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMLinker$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMIRReader$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMAsmParser$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMFrontendOpenMP$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMScalarOpts$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMInstCombine$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMAggressiveInstCombine$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMTransformUtils$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMBitWriter$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMAnalysis$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMProfileData$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMDebugInfoDWARF$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMObject$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMTextAPI$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMMCParser$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMMC$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMBitReader$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMCore$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMRemarks$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMBitstreamReader$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMBinaryFormat$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMSupport$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_PATH)/lib/libLLVMDemangle$(VBOX_SUFF_LIB)
+VBOX_LLVM_CONFIG ?= $(VBOX_LLVM_PATH)/bin/llvm-config
+ifneq ($(wildcard $(VBOX_LLVM_CONFIG)),)
+ VBOX_LLVM_LIBDIR      := $(shell $(VBOX_LLVM_CONFIG) --libdir)
+ VBOX_LLVM_SHARED_LIBS := $(shell $(VBOX_LLVM_CONFIG) --link-shared --libs)
+ VBOX_LLVM_LIBS        := $(foreach lib,$(VBOX_LLVM_SHARED_LIBS),$(if $(filter -l%,$(lib)),$(VBOX_LLVM_LIBDIR)/lib$(patsubst -l%,%,$(lib))$(VBOX_SUFF_DLL),$(lib)))
+else
+ VBOX_LLVM_LIBS        := $(VBOX_LLVM_COMPONENT_LIBS)
+endif
 
 
 # The metal shader compiler
@@ -280,36 +319,7 @@ VBoxDxMt_LIBS    = \
 	$(PATH_STAGE_LIB)/VBox-DxMtNativeUtil$(VBOX_SUFF_LIB) \
 	$(PATH_STAGE_LIB)/VBox-DxMtNativeDxbcParser$(VBOX_SUFF_LIB) \
 	$(PATH_STAGE_LIB)/VBox-DxMtNativeMetal$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMPasses$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMTarget$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMObjCARCOpts$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMCoroutines$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMipo$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMInstrumentation$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMVectorize$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMLinker$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMIRReader$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMAsmParser$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMFrontendOpenMP$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMScalarOpts$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMInstCombine$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMAggressiveInstCombine$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMTransformUtils$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMBitWriter$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMAnalysis$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMProfileData$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMDebugInfoDWARF$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMObject$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMTextAPI$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMMCParser$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMMC$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMBitReader$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMCore$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMRemarks$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMBitstreamReader$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMBinaryFormat$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMSupport$(VBOX_SUFF_LIB) \
-	$(VBOX_LLVM_PATH)/lib/libLLVMDemangle$(VBOX_SUFF_LIB) \
+	$(VBOX_LLVM_LIBS) \
 	$(LIB_RUNTIME)
 VBoxDxMt_LDFLAGS += \
 	-weak_framework CoreFoundation \
@@ -321,4 +331,3 @@ VBoxDxMt_LDFLAGS += \
 	-weak_framework Cocoa
 
 include $(FILE_KBUILD_SUB_FOOTER)
-

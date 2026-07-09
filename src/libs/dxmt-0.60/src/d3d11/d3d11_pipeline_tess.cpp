@@ -15,9 +15,10 @@ public:
                                   const MTL_GRAPHICS_PIPELINE_DESC *pDesc)
       : ComObject<IMTLCompiledTessellationPipeline>(),
         num_rtvs(pDesc->NumColorAttachments),
-        depth_stencil_format(pDesc->DepthStencilFormat),
-        topology_class(pDesc->TopologyClass), device_(pDevice),
-        pBlendState(pDesc->BlendState),
+	        depth_stencil_format(pDesc->DepthStencilFormat),
+	        topology_class(pDesc->TopologyClass), device_(pDevice),
+	        ready_(false),
+	        pBlendState(pDesc->BlendState),
         RasterizationEnabled(pDesc->RasterizationEnabled),
         SampleCount(pDesc->SampleCount) {
     uint32_t unorm_output_reg_mask = 0;

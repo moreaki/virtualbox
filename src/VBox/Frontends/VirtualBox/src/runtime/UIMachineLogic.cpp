@@ -114,6 +114,7 @@
 
 /* Other VBox includes: */
 #include <iprt/path.h>
+#include <iprt/time.h>
 
 /* VirtualBox interface declarations: */
 #include <VBox/com/VirtualBox.h>
@@ -332,19 +333,30 @@ void UIMachineLogic::openNetworkSettingsDialogTheModalWay()
 }
 
 #ifdef VBOX_WS_MAC
+/** Minimum interval between live Dock preview frame updates. */
+static const uint64_t s_u64DockIconUpdateIntervalMs = 250;
+
 void UIMachineLogic::updateDockIcon()
 {
     if (!isMachineWindowsCreated())
         return;
 
-    if (   m_fIsDockIconEnabled
-        && m_pDockIconPreview)
-        if(UIMachineView *pView = machineWindows().at(m_DockIconPreviewMonitor)->machineView())
-            if (CGImageRef image = pView->vmContentImage())
-            {
-                m_pDockIconPreview->updateDockPreview(image);
-                CGImageRelease(image);
-            }
+    if (   !m_fIsDockIconEnabled
+        || !m_pDockIconPreview)
+        return;
+
+    const uint64_t u64NowMs = RTTimeMilliTS();
+    if (   m_u64LastDockIconUpdateMs
+        && u64NowMs - m_u64LastDockIconUpdateMs < s_u64DockIconUpdateIntervalMs)
+        return;
+
+    if (UIMachineView *pView = machineWindows().at(m_DockIconPreviewMonitor)->machineView())
+        if (CGImageRef image = pView->vmContentImage())
+        {
+            m_u64LastDockIconUpdateMs = u64NowMs;
+            m_pDockIconPreview->updateDockPreview(image);
+            CGImageRelease(image);
+        }
 }
 
 void UIMachineLogic::updateDockIconSize(int screenId, int width, int height)
@@ -790,6 +802,7 @@ UIMachineLogic::UIMachineLogic(UIMachine *pMachine)
     , m_pDockPreviewSelectMonitorGroup(0)
     , m_pDockSettingsMenuSeparator(0)
     , m_DockIconPreviewMonitor(0)
+    , m_u64LastDockIconUpdateMs(0)
     , m_pDockSettingMenuAction(0)
 #endif /* VBOX_WS_MAC */
     , m_pHostLedsState(NULL)

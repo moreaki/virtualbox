@@ -611,7 +611,7 @@ convert_dxbc_vertex_for_geometry_shader(
       llvm::ArrayType::get(types._int4, max_output_register)->getPointerTo((uint32_t)air::AddressSpace::object_data)
   );
   resource_map.output.ptr_int4 = builder.CreateGEP(
-      resource_map.output.ptr_int4->getType()->getNonOpaquePointerElementType(), resource_map.output.ptr_int4,
+      llvm::ArrayType::get(types._int4, max_output_register), resource_map.output.ptr_int4,
       {warp_vertex_id}
   );
   resource_map.output.ptr_float4 = builder.CreateBitCast(
@@ -619,7 +619,7 @@ convert_dxbc_vertex_for_geometry_shader(
       llvm::ArrayType::get(types._float4, max_output_register)->getPointerTo((uint32_t)air::AddressSpace::object_data)
   );
   resource_map.output.ptr_float4 = builder.CreateGEP(
-      resource_map.output.ptr_float4->getType()->getNonOpaquePointerElementType(), resource_map.output.ptr_float4,
+      llvm::ArrayType::get(types._float4, max_output_register), resource_map.output.ptr_float4,
       {warp_vertex_id}
   );
 
@@ -678,7 +678,7 @@ convert_dxbc_vertex_for_geometry_shader(
   if (index_buffer_idx != ~0u) {
     auto start_index = builder.CreateExtractValue(draw_arguments, 2);
     auto index_buffer = function->getArg(index_buffer_idx);
-    auto index_buffer_element_type = index_buffer->getType()->getNonOpaquePointerElementType();
+    auto index_buffer_element_type = ia_layout->index_buffer_format == 1 ? types._short : types._int;
     auto vertex_id = builder.CreateLoad(
         index_buffer_element_type,
         builder.CreateGEP(index_buffer_element_type, index_buffer, {builder.CreateAdd(start_index, global_index_id)})

@@ -213,6 +213,10 @@ typedef struct VMSVGAR3STATE
     STAMPROFILE             StatR3Cmd3dDrawPrimitivesProf;
     STAMPROFILE             StatR3Cmd3dSurfaceDmaProf;
     STAMPROFILE             StatR3Cmd3dBlitSurfaceToScreenProf;
+    STAMPROFILE             StatR3DxStartScreenReadbackProf;
+    STAMPROFILE             StatR3DxProcessPendingUpdatesProf;
+    STAMPROFILE             StatR3DxOutputTargetConvertProf;
+    STAMPROFILE             StatR3DxOutputTargetReadbackProf;
     STAMCOUNTER             StatR3CmdDefineGmr2;
     STAMCOUNTER             StatR3CmdDefineGmr2Free;
     STAMCOUNTER             StatR3CmdDefineGmr2Modify;
@@ -271,6 +275,16 @@ typedef struct VMSVGAR3STATE
     STAMCOUNTER             StatR3Cmd3dGenerateMipmaps;
     STAMCOUNTER             StatR3Cmd3dActivateSurface;
     STAMCOUNTER             StatR3Cmd3dDeactivateSurface;
+    STAMCOUNTER             StatR3DxStartScreenReadback;
+    STAMCOUNTER             StatR3DxReadbackPoll;
+    STAMCOUNTER             StatR3DxReadbackReady;
+    STAMCOUNTER             StatR3DxReadbackUpdateRects;
+    STAMCOUNTER             StatR3DxReadbackUpdateMerge;
+    STAMCOUNTER             StatR3DxReadbackRestart;
+    STAMCOUNTER             StatR3DxReadbackChanged;
+    STAMCOUNTER             StatR3DxReadbackUnchanged;
+    STAMCOUNTER             StatR3DxOutputTargetConvert;
+    STAMCOUNTER             StatR3DxOutputTargetReadback;
 
     STAMCOUNTER             StatR3RegConfigDoneWr;
     STAMCOUNTER             StatR3RegGmrDescriptorWr;

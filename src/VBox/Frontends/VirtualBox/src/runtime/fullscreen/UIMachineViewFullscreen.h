@@ -51,6 +51,11 @@ private slots:
     /* Handler: Console callback stuff: */
     void sltAdditionsStateChanged();
 
+public slots:
+
+    /** Handles NotifyChange event received from frame-buffer. */
+    void sltHandleNotifyChange(int iWidth, int iHeight) RT_OVERRIDE;
+
 private:
 
     /* Event handlers: */
@@ -71,8 +76,17 @@ private:
     /** Defines whether the guest-screen auto-resize is @a fEnabled. */
     virtual void setGuestAutoresizeEnabled(bool bEnabled) RT_OVERRIDE;
 
+    /** Returns size-hint. */
+    QSize sizeHint() const RT_OVERRIDE;
     /** Adjusts guest-screen size to correspond current <i>working area</i> size. */
     void adjustGuestScreenSize() RT_OVERRIDE;
+
+#ifdef VBOX_WS_MAC
+    /** Applies macOS fullscreen layout and framebuffer scaling. */
+    void applyMacOSFullscreenLayout(const QSize &hostSize);
+    /** Requests the macOS fullscreen guest framebuffer size for @a hostSize. */
+    void requestMacOSFullscreenGuestSize(const QSize &hostSize);
+#endif
 
     /* Helpers: Geometry stuff: */
     QRect workingArea() const RT_OVERRIDE;

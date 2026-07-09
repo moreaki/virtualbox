@@ -1414,8 +1414,8 @@ class LibraryCheck(CheckBase):
         # macOS (Darwin)
         #
         elif self.enmBuildTarget == BuildTarget.DARWIN:
-            asPaths.extend([ '/opt/homebrew/include',
-                             os.path.join(g_oEnv['VBOX_PATH_MACOSX_SDK'], 'usr', 'include', 'c++', 'v1') ]);
+            asPaths.extend([ os.path.join(g_oEnv['VBOX_PATH_MACOSX_SDK'], 'usr', 'include', 'c++', 'v1'),
+                             '/opt/homebrew/include' ]);
 
         #
         # Linux
@@ -1524,6 +1524,11 @@ class LibraryCheck(CheckBase):
             asResults, _ = self.findFiles(sCurSearchPath, asHdrToSearch, fAbsolute = True, fStripFilenames = True);
             for sResIncFile, dictRes in asResults.items():
                 sIncPath = dictRes['found_path'];
+                if    sIncPath \
+                  and self.enmBuildTarget == BuildTarget.DARWIN \
+                  and sResIncFile == 'iostream' \
+                  and '/opt/homebrew/include/c++/' in sIncPath:
+                    continue;
                 if  sIncPath \
                 and sResIncFile not in setHdrFound: # Take the first match found.
                     setHdrFound[sResIncFile] = sIncPath;
@@ -1764,6 +1769,14 @@ class LibraryCheck(CheckBase):
         sPathBin = None;
         sPathLibExec = None;
 
+        if self.enmBuildTarget == BuildTarget.DARWIN and self.sRootPath:
+            self.asLibFiles = [];
+            self.asIncPaths.insert(0, os.path.join(self.sRootPath, 'lib', 'QtCore.framework', 'Headers'));
+            self.asLibPaths.insert(0, os.path.join(self.sRootPath, 'lib'));
+            self.asCompilerArgs.extend([ '-F', os.path.join(self.sRootPath, 'lib') ]);
+            self.asLinkerArgs.extend([ '-std=c++17', '-framework', 'QtCore',
+                                       '-F', os.path.join(self.sRootPath, 'lib'), '-g', '-O', '-Wall' ]);
+
         # Check if we have our own pre-compiled Qt in tools first.
         sPathBase = self.getToolPath();
         if sPathBase:
@@ -1803,7 +1816,8 @@ class LibraryCheck(CheckBase):
 
                 # Search for the library file.
                 # Note: Ordered by precedence. Do not change!
-                asPath = [ sPathBase,
+                asPath = [ self.sRootPath,
+                        sPathBase,
                         getPackagePath('qt@6')[1],
                         '/System/Library',
                         '/Library' ];
@@ -1832,6 +1846,7 @@ class LibraryCheck(CheckBase):
                     # Include the framework headers.
                     self.asIncPaths.insert(0, f'{sPathBase}/lib/QtCore.framework/Headers');
                     # More stuff needed in order to get it linked.
+                    self.asCompilerArgs.extend([ '-F', f'{sPathBase}/lib' ]);
                     self.asLinkerArgs.extend([ '-std=c++17', '-framework', 'QtCore', '-F', f'{sPathBase}/lib', '-g', '-O', '-Wall' ]);
 
         sPkgName = 'Qt6Core'; ## @todo Make the code generic once we have similar SDKs.
@@ -3205,6 +3220,14 @@ class EnvFileWriter(EnvMgrWriter):
         super().__init__(asFilename, enmBuildTarget, oEnvMgr, cchKeyAlign);
         self.sKeyword = 'set' if enmBuildTarget == BuildTarget.WINDOWS else 'export';
 
+    def formatValue(self, sVal):
+        """
+        Formats an environment variable value for the target shell.
+        """
+        if self.enmBuildTarget == BuildTarget.WINDOWS:
+            return sVal;
+        return shlex.quote(sVal);
+
     def write(self, sKey, oVal = None):
         """
         Writes an environment variable appropriate for the platform.
@@ -3216,12 +3239,12 @@ class EnvFileWriter(EnvMgrWriter):
                 sValStr = ' '.join(map(str, oVal));
             else:
                 sValStr = str(oVal);
-            super().write_raw(f"{self.sKeyword} {sKey}={sValStr}");
+            super().write_raw(f"{self.sKeyword} {sKey}={self.formatValue(sValStr)}");
             return;
 
         if  sKey in self.oEnvMgr.env \
         and sKey is not None:
-            super().write_raw(f"{self.sKeyword} {sKey}={oVal if oVal else self.oEnvMgr[sKey]}");
+            super().write_raw(f"{self.sKeyword} {sKey}={self.formatValue(oVal if oVal else self.oEnvMgr[sKey])}");
 
     def write_all(self, asPrefixInclude = None, asPrefixExclude = None):
         """

@@ -49,6 +49,7 @@
 #include "DevVGA-SVGA.h"
 #include "DevVGA-SVGA3d.h"
 #include "DevVGA-SVGA3d-internal.h"
+#include "DevVGA-SVGA-internal.h"
 #include "DevVGA-SVGA3d-dx-shader.h"
 
 #include "DevVGA-SVGA3d-dx-dx11.h"
@@ -3241,9 +3242,14 @@ static int vmsvga3dBackSurfaceCreateResource(PVGASTATECC pThisCC, PVMSVGA3DSURFA
          * On NVidia the host driver does not allow initial data for large textures with D3D11_BIND_DECODER flag.
          */
         D3D11_SUBRESOURCE_DATA *paInitialData = NULL;
+        /* Depth/stencil resources are initialized by subsequent rendering commands
+         * such as clears.  Do not upload the optional host-side backing buffer here:
+         * it may be stale after hardware realization and DXMT's Metal path validates
+         * the source bytes during texture creation.
+         */
         if (   pSurface->paMipmapLevels[0].pSurfaceData
             && pSurface->surfaceDesc.multisampleCount <= 1
-            && (BindFlags & D3D11_BIND_DECODER) == 0
+            && (BindFlags & (D3D11_BIND_DECODER | D3D11_BIND_DEPTH_STENCIL)) == 0
            )
         {
             /* Can happen for a non GBO surface or if GBO texture was updated prior to creation of the hardware resource. */
@@ -3965,10 +3971,86 @@ DECLINLINE(int) dxFenceCmp64(uint64_t u64FenceA, uint64_t u64FenceB)
 }
 
 
-static void dxStartScreenReadback(VMSVGASCREENOBJECT *pScreen, DXDEVICE *pDXDevice)
+DECLINLINE(SVGASignedRect) dxScreenRectUnion(SVGASignedRect const &a, SVGASignedRect const &b)
+{
+    SVGASignedRect u;
+    u.left   = RT_MIN(a.left, b.left);
+    u.top    = RT_MIN(a.top, b.top);
+    u.right  = RT_MAX(a.right, b.right);
+    u.bottom = RT_MAX(a.bottom, b.bottom);
+    return u;
+}
+
+
+DECLINLINE(bool) dxScreenRectsTouchOrOverlap(SVGASignedRect const &a, SVGASignedRect const &b)
+{
+    return    a.left   <= b.right
+           && b.left   <= a.right
+           && a.top    <= b.bottom
+           && b.top    <= a.bottom;
+}
+
+
+DECLINLINE(uint64_t) dxScreenRectArea(SVGASignedRect const &r)
+{
+    if (   r.right <= r.left
+        || r.bottom <= r.top)
+        return 0;
+    return (uint64_t)(r.right - r.left) * (uint64_t)(r.bottom - r.top);
+}
+
+
+DECLINLINE(bool) dxShouldMergeScreenRects(SVGASignedRect const &a, SVGASignedRect const &b)
+{
+    if (dxScreenRectsTouchOrOverlap(a, b))
+        return true;
+
+    SVGASignedRect const u = dxScreenRectUnion(a, b);
+    uint64_t const cbUseful = dxScreenRectArea(a) + dxScreenRectArea(b);
+    uint64_t const cbUnion  = dxScreenRectArea(u);
+
+    /*
+     * A readback/update pair has fixed overhead. Merge nearby small rects when
+     * the extra copied area is bounded; keep far apart large rects separate.
+     */
+    return    cbUnion <= _256K
+           || cbUnion <= cbUseful * 4;
+}
+
+
+static SVGASignedRect dxPendingScreenUpdateUnion(VMSVGAHWSCREEN *p)
+{
+    SVGASignedRect dirtyRect;
+    dirtyRect.left   = 0;
+    dirtyRect.top    = 0;
+    dirtyRect.right  = (int32_t)p->cHwScreenWidth;
+    dirtyRect.bottom = (int32_t)p->cHwScreenHeight;
+
+    bool fHaveDirtyRect = false;
+    for (uint32_t i = 0; i < p->cUpdates; ++i)
+    {
+        uint32_t const idx = (p->idxLastUpdate + i) % RT_ELEMENTS(p->aUpdates);
+        if (p->aUpdates[idx].u64ReadbackFence != p->u64ReadbackFence)
+            continue;
+
+        dirtyRect = fHaveDirtyRect ? dxScreenRectUnion(dirtyRect, p->aUpdates[idx].rect)
+                                   : p->aUpdates[idx].rect;
+        fHaveDirtyRect = true;
+    }
+
+    return dirtyRect;
+}
+
+
+static void dxStartScreenReadback(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen, DXDEVICE *pDXDevice)
 {
     /* Get the screen data to the system memory. */
     VMSVGAHWSCREEN *p = pScreen->pHwScreen;
+    PVMSVGAR3STATE const pSvgaR3State = pThisCC->svga.pSvgaR3State;
+    SVGASignedRect const dirtyRect = dxPendingScreenUpdateUnion(p);
+
+    STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxStartScreenReadback);
+    STAM_REL_PROFILE_START(&pSvgaR3State->StatR3DxStartScreenReadbackProf, a);
 
     /* Check targets. Targets are created and deleted on FIFO thread so it is ok to access them without a lock. */
     VMSVGAOUTPUTTARGET *pOutputTarget;
@@ -3977,8 +4059,11 @@ static void dxStartScreenReadback(VMSVGASCREENOBJECT *pScreen, DXDEVICE *pDXDevi
         VMSVGAHWOUTPUTTARGET *pHwOutputTarget = pOutputTarget->pHwOutputTarget;
         AssertContinue(pHwOutputTarget);
 
+        STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxOutputTargetConvert);
+        STAM_REL_PROFILE_START(&pSvgaR3State->StatR3DxOutputTargetConvertProf, b);
         dxHwOutputTargetConvert(pOutputTarget, pDXDevice->pImmediateContext,
-                                p->pScreenTextureSRV, p->cHwScreenWidth, p->cHwScreenHeight);
+                                p->pScreenTextureSRV, p->cHwScreenWidth, p->cHwScreenHeight, dirtyRect);
+        STAM_REL_PROFILE_STOP(&pSvgaR3State->StatR3DxOutputTargetConvertProf, b);
     }
 
     /* Submit all the work: target conversion and readback to staging resources. */
@@ -3990,6 +4075,8 @@ static void dxStartScreenReadback(VMSVGASCREENOBJECT *pScreen, DXDEVICE *pDXDevi
     ++p->u64ReadbackFence; /* vmsvga3dBackProcessPendingTasks will update rectangles with lower u64ReadbackFences. */
     if (p->u64ReadbackFence == 0) /* 0 is a special "no fence" value. */
         ++p->u64ReadbackFence;
+
+    STAM_REL_PROFILE_STOP(&pSvgaR3State->StatR3DxStartScreenReadbackProf, a);
 }
 
 
@@ -3997,19 +4084,27 @@ static void dxProcessPendingUpdates(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pSc
 {
     PVMSVGA3DSTATE pState = pThisCC->svga.p3dState;
     AssertReturnVoid(pState);
+    PVMSVGAR3STATE const pSvgaR3State = pThisCC->svga.pSvgaR3State;
 
     DXDEVICE *pDXDevice = dxDeviceGet(pState);
     AssertReturnVoid(pDXDevice->pDevice);
 
     VMSVGAHWSCREEN *p = pScreen->pHwScreen;
 
+    STAM_REL_PROFILE_START(&pSvgaR3State->StatR3DxProcessPendingUpdatesProf, a);
     if (p->fReadingBack)
     {
+        STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxReadbackPoll);
         BOOL queryData;
         HRESULT hr = pDXDevice->pImmediateContext->GetData(p->pScreenReadbackQuery, &queryData, sizeof(queryData), 0);
-        AssertReturnVoid(SUCCEEDED(hr));
+        if (FAILED(hr))
+        {
+            STAM_REL_PROFILE_STOP(&pSvgaR3State->StatR3DxProcessPendingUpdatesProf, a);
+            AssertFailedReturnVoid();
+        }
         if (hr == S_OK)
         {
+            STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxReadbackReady);
             /* Query has completed. Copy already updated rectangles. */
             Assert(p->cUpdates);
             while (p->cUpdates)
@@ -4020,13 +4115,27 @@ static void dxProcessPendingUpdates(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pSc
                 SVGASignedRect const &updateRect = p->aUpdates[p->idxLastUpdate].rect;
 
                 /* Check targets. Targets are created and deleted on FIFO thread so it is ok to access them. */
+                bool fAnyOutputTargetChanged = false;
                 VMSVGAOUTPUTTARGET *pOutputTarget;
                 RTListForEach(&pScreen->listOutputTargets, pOutputTarget, VMSVGAOUTPUTTARGET, nodeOutputTarget)
                 {
                     VMSVGAHWOUTPUTTARGET *pHwOutputTarget = pOutputTarget->pHwOutputTarget;
                     AssertContinue(pHwOutputTarget);
 
-                    dxHwOutputTargetReadback(pOutputTarget, pDXDevice->pImmediateContext, updateRect);
+                    STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxOutputTargetReadback);
+                    STAM_REL_PROFILE_START(&pSvgaR3State->StatR3DxOutputTargetReadbackProf, b);
+                    bool fOutputTargetChanged = false;
+                    int rc = dxHwOutputTargetReadback(pOutputTarget, pDXDevice->pImmediateContext,
+                                                      updateRect, &fOutputTargetChanged);
+                    STAM_REL_PROFILE_STOP(&pSvgaR3State->StatR3DxOutputTargetReadbackProf, b);
+                    AssertRC(rc);
+                    if (!fOutputTargetChanged)
+                    {
+                        STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxReadbackUnchanged);
+                        continue;
+                    }
+                    STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxReadbackChanged);
+                    fAnyOutputTargetChanged = true;
 
                     /* Increment u64UpdateSequenceNumber, skipping 0 on rollover. */
                     uint64_t u64 = pOutputTarget->u64UpdateSequenceNumber + 1;
@@ -4037,9 +4146,11 @@ static void dxProcessPendingUpdates(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pSc
 
                 p->aUpdates[p->idxLastUpdate].u64ReadbackFence = 0;
 
-                vmsvgaR3UpdateScreen(pThisCC, pScreen,
-                                     updateRect.left, updateRect.top,
-                                     updateRect.right - updateRect.left, updateRect.bottom - updateRect.top);
+                STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxReadbackUpdateRects);
+                if (fAnyOutputTargetChanged)
+                    vmsvgaR3UpdateScreen(pThisCC, pScreen,
+                                         updateRect.left, updateRect.top,
+                                         updateRect.right - updateRect.left, updateRect.bottom - updateRect.top);
 
                 /* Next update. */
                 p->idxLastUpdate = (p->idxLastUpdate + 1) % RT_ELEMENTS(p->aUpdates);
@@ -4047,17 +4158,47 @@ static void dxProcessPendingUpdates(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pSc
             }
 
             if (p->cUpdates > 0)
-                dxStartScreenReadback(pScreen, pDXDevice); /* There were screen updates since the last readback. */
+            {
+                STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxReadbackRestart);
+                dxStartScreenReadback(pThisCC, pScreen, pDXDevice); /* There were screen updates since the last readback. */
+            }
             else
                 p->fReadingBack = false;
         }
     }
+    STAM_REL_PROFILE_STOP(&pSvgaR3State->StatR3DxProcessPendingUpdatesProf, a);
+}
+
+
+static bool dxMergePendingScreenUpdate(PVGASTATECC pThisCC, VMSVGAHWSCREEN *p, SVGASignedRect const &updateRect)
+{
+    PVMSVGAR3STATE const pSvgaR3State = pThisCC->svga.pSvgaR3State;
+
+    for (uint32_t i = 0; i < p->cUpdates; ++i)
+    {
+        uint32_t const idx = (p->idxLastUpdate + i) % RT_ELEMENTS(p->aUpdates);
+        if (p->aUpdates[idx].u64ReadbackFence != p->u64ReadbackFence)
+            continue;
+
+        SVGASignedRect const &pendingRect = p->aUpdates[idx].rect;
+        if (!dxShouldMergeScreenRects(pendingRect, updateRect))
+            continue;
+
+        p->aUpdates[idx].rect = dxScreenRectUnion(pendingRect, updateRect);
+        STAM_REL_COUNTER_INC(&pSvgaR3State->StatR3DxReadbackUpdateMerge);
+        return true;
+    }
+
+    return false;
 }
 
 
 static void dxStoreScreenUpdate(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen, SVGASignedRect const &updateRect)
 {
     VMSVGAHWSCREEN *p = pScreen->pHwScreen;
+
+    if (dxMergePendingScreenUpdate(pThisCC, p, updateRect))
+        return;
 
     if (p->cUpdates >= RT_ELEMENTS(p->aUpdates))
     {
@@ -4067,7 +4208,7 @@ static void dxStoreScreenUpdate(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen
             DXDEVICE *pDXDevice = dxDeviceGet(pThisCC->svga.p3dState);
             AssertReturnVoid(pDXDevice->pDevice);
 
-            dxStartScreenReadback(pScreen, pDXDevice);
+            dxStartScreenReadback(pThisCC, pScreen, pDXDevice);
             p->fReadingBack = true;
         }
 
@@ -4233,7 +4374,7 @@ static DECLCALLBACK(int) vmsvga3dBackSurfaceBlitToScreen(PVGASTATECC pThisCC, VM
     if (!p->fReadingBack)
     {
         /* Get the screen data to the system memory. */
-        dxStartScreenReadback(pScreen, pDXDevice);
+        dxStartScreenReadback(pThisCC, pScreen, pDXDevice);
         p->fReadingBack = true;
     }
 
@@ -4806,7 +4947,7 @@ static DECLCALLBACK(int) vmsvga3dScreenTargetUpdate(PVGASTATECC pThisCC, VMSVGAS
     if (!pHwScreen->fReadingBack)
     {
         /* Get the screen data to the system memory. */
-        dxStartScreenReadback(pScreen, pDXDevice);
+        dxStartScreenReadback(pThisCC, pScreen, pDXDevice);
         pHwScreen->fReadingBack = true;
     }
 

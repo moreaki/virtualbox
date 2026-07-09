@@ -8684,6 +8684,10 @@ int vmsvgaR3Init(PPDMDEVINS pDevIns)
     REG_PRF(&pSVGAState->StatR3Cmd3dSurfaceDmaProf,       "VMSVGA/Cmd/3dSurfaceDmaProf",           "Profiling of SVGA_3D_CMD_SURFACE_DMA.");
 # endif
     REG_PRF(&pSVGAState->StatR3Cmd3dBlitSurfaceToScreenProf, "VMSVGA/Cmd/3dBlitSurfaceToScreenProf", "Profiling of SVGA_3D_CMD_BLIT_SURFACE_TO_SCREEN.");
+    REG_PRF(&pSVGAState->StatR3DxStartScreenReadbackProf, "VMSVGA/DX/StartScreenReadbackProf", "Profiling of DX screen readback submission.");
+    REG_PRF(&pSVGAState->StatR3DxProcessPendingUpdatesProf, "VMSVGA/DX/ProcessPendingUpdatesProf", "Profiling of DX pending screen update processing.");
+    REG_PRF(&pSVGAState->StatR3DxOutputTargetConvertProf, "VMSVGA/DX/OutputTargetConvertProf", "Profiling of DX output target conversion.");
+    REG_PRF(&pSVGAState->StatR3DxOutputTargetReadbackProf, "VMSVGA/DX/OutputTargetReadbackProf", "Profiling of DX output target readback.");
     REG_CNT(&pSVGAState->StatR3Cmd3dActivateSurface,      "VMSVGA/Cmd/3dActivateSurface",          "SVGA_3D_CMD_ACTIVATE_SURFACE");
     REG_CNT(&pSVGAState->StatR3Cmd3dBeginQuery,           "VMSVGA/Cmd/3dBeginQuery",               "SVGA_3D_CMD_BEGIN_QUERY");
     REG_CNT(&pSVGAState->StatR3Cmd3dClear,                "VMSVGA/Cmd/3dClear",                    "SVGA_3D_CMD_CLEAR");
@@ -8718,6 +8722,16 @@ int vmsvgaR3Init(PPDMDEVINS pDevIns)
     REG_CNT(&pSVGAState->StatR3Cmd3dSurfaceScreen,        "VMSVGA/Cmd/3dSurfaceScreen",            "SVGA_3D_CMD_SURFACE_SCREEN");
     REG_CNT(&pSVGAState->StatR3Cmd3dSurfaceStretchBlt,    "VMSVGA/Cmd/3dSurfaceStretchBlt",        "SVGA_3D_CMD_SURFACE_STRETCHBLT");
     REG_CNT(&pSVGAState->StatR3Cmd3dWaitForQuery,         "VMSVGA/Cmd/3dWaitForQuery",             "SVGA_3D_CMD_WAIT_FOR_QUERY");
+    REG_CNT(&pSVGAState->StatR3DxStartScreenReadback,     "VMSVGA/DX/StartScreenReadback",         "DX screen readback submissions.");
+    REG_CNT(&pSVGAState->StatR3DxReadbackPoll,            "VMSVGA/DX/ReadbackPoll",                "DX screen readback query polls.");
+    REG_CNT(&pSVGAState->StatR3DxReadbackReady,           "VMSVGA/DX/ReadbackReady",               "DX screen readback query completions.");
+    REG_CNT(&pSVGAState->StatR3DxReadbackUpdateRects,     "VMSVGA/DX/ReadbackUpdateRects",         "DX screen update rectangles processed after readback.");
+    REG_CNT(&pSVGAState->StatR3DxReadbackUpdateMerge,     "VMSVGA/DX/ReadbackUpdateMerge",         "DX pending screen update rectangles merged before readback.");
+    REG_CNT(&pSVGAState->StatR3DxReadbackRestart,         "VMSVGA/DX/ReadbackRestart",             "DX readbacks restarted due to queued updates.");
+    REG_CNT(&pSVGAState->StatR3DxReadbackChanged,         "VMSVGA/DX/ReadbackChanged",             "DX output target readbacks that changed host-visible pixels.");
+    REG_CNT(&pSVGAState->StatR3DxReadbackUnchanged,       "VMSVGA/DX/ReadbackUnchanged",           "DX output target readbacks that did not change host-visible pixels.");
+    REG_CNT(&pSVGAState->StatR3DxOutputTargetConvert,     "VMSVGA/DX/OutputTargetConvert",         "DX output target conversions.");
+    REG_CNT(&pSVGAState->StatR3DxOutputTargetReadback,    "VMSVGA/DX/OutputTargetReadback",        "DX output target readbacks.");
     REG_CNT(&pSVGAState->StatR3CmdAnnotationCopy,         "VMSVGA/Cmd/AnnotationCopy",             "SVGA_CMD_ANNOTATION_COPY");
     REG_CNT(&pSVGAState->StatR3CmdAnnotationFill,         "VMSVGA/Cmd/AnnotationFill",             "SVGA_CMD_ANNOTATION_FILL");
     REG_CNT(&pSVGAState->StatR3CmdBlitGmrFbToScreen,      "VMSVGA/Cmd/BlitGmrFbToScreen",          "SVGA_CMD_BLIT_GMRFB_TO_SCREEN");

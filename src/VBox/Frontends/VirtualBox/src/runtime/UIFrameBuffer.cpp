@@ -27,6 +27,7 @@
 
 /* Qt includes: */
 #include <QImage>
+#include <QList>
 #include <QRegion>
 #include <QPainter>
 #include <QPaintEvent>
@@ -77,8 +78,8 @@ signals:
 
     /** Notifies listener about guest-screen resolution changes. */
     void sigNotifyChange(int iWidth, int iHeight);
-    /** Notifies listener about guest-screen updates. */
-    void sigNotifyUpdate(int iX, int iY, int iWidth, int iHeight);
+    /** Notifies listener that one or more guest-screen updates are pending. */
+    void sigNotifyUpdatePending();
     /** Notifies listener about guest-screen visible-region changes. */
     void sigSetVisibleRegion(QRegion region);
 
@@ -262,6 +263,8 @@ public:
 
 protected slots:
 
+    /** Handles coalesced guest-screen updates. */
+    void sltHandlePendingNotifyUpdate();
     /** Handles guest requests to change mouse pointer shape or position. */
     void sltMousePointerShapeOrPositionChange();
 
@@ -274,6 +277,8 @@ protected:
 
     /** Updates coordinate-system: */
     void updateCoordinateSystem();
+    /** Queues a guest-screen update rectangle for asynchronous GUI-thread processing. */
+    void queueNotifyUpdate(ULONG uX, ULONG uY, ULONG uWidth, ULONG uHeight);
 
     /** Default paint routine. */
     void paintDefault(QPaintEvent *pEvent);
@@ -312,6 +317,10 @@ protected:
     CDisplaySourceBitmap m_pendingSourceBitmap;
     /** Holds whether there is a pending source bitmap which must be applied. */
     bool m_fPendingSourceBitmap;
+    /** Holds pending guest-screen update rectangles. */
+    QList<QRect> m_pendingUpdateRectangles;
+    /** Holds whether a pending-update flush has already been queued. */
+    bool m_fNotifyUpdatePending;
 
     /** Holds machine-view this frame-buffer is bounded to. */
     UIMachineView *m_pMachineView;
@@ -391,6 +400,7 @@ UIFrameBufferPrivate::UIFrameBufferPrivate()
     : m_uScreenId(0)
     , m_iWidth(0), m_iHeight(0)
     , m_fPendingSourceBitmap(false)
+    , m_fNotifyUpdatePending(false)
     , m_pMachineView(NULL)
     , m_iWinId(0)
     , m_fUpdatesAllowed(false)
@@ -643,6 +653,8 @@ STDMETHODIMP UIFrameBufferPrivate::NotifyChange(ULONG uScreenId, ULONG uX, ULONG
 
     /* Disable screen updates: */
     m_fUpdatesAllowed = false;
+    m_pendingUpdateRectangles.clear();
+    m_fNotifyUpdatePending = false;
 
     /* While updates are disabled, visible region will be saved:  */
     m_pendingSyncVisibleRegion = QRegion();
@@ -695,7 +707,7 @@ STDMETHODIMP UIFrameBufferPrivate::NotifyUpdate(ULONG uX, ULONG uY, ULONG uWidth
     LogRel3(("GUI: UIFrameBufferPrivate::NotifyUpdate: Origin=%lux%lu, Size=%lux%lu, Sending to async-handler\n",
              (unsigned long)uX, (unsigned long)uY,
              (unsigned long)uWidth, (unsigned long)uHeight));
-    emit sigNotifyUpdate(uX, uY, uWidth, uHeight);
+    queueNotifyUpdate(uX, uY, uWidth, uHeight);
 
     /* Unlock access to frame-buffer: */
     unlock();
@@ -748,7 +760,7 @@ STDMETHODIMP UIFrameBufferPrivate::NotifyUpdateImage(ULONG uX, ULONG uY,
         LogRel3(("GUI: UIFrameBufferPrivate::NotifyUpdateImage: Origin=%lux%lu, Size=%lux%lu, Sending to async-handler\n",
                  (unsigned long)uX, (unsigned long)uY,
                  (unsigned long)uWidth, (unsigned long)uHeight));
-        emit sigNotifyUpdate(uX, uY, uWidth, uHeight);
+        queueNotifyUpdate(uX, uY, uWidth, uHeight);
     }
 
     /* Unlock access to frame-buffer: */
@@ -1151,6 +1163,9 @@ void UIFrameBufferPrivate::performRescale()
     switch (m_pMachineView->machineLogic()->visualStateType())
     {
         case UIVisualStateType_Scale:
+#ifdef VBOX_WS_MAC
+        case UIVisualStateType_Fullscreen:
+#endif
             m_scaledSize = scaledSize().width() == m_iWidth && scaledSize().height() == m_iHeight ? QSize() : scaledSize();
             break;
         default:
@@ -1221,8 +1236,8 @@ void UIFrameBufferPrivate::prepareConnections()
     connect(this, &UIFrameBufferPrivate::sigNotifyChange,
             m_pMachineView, &UIMachineView::sltHandleNotifyChange,
             Qt::QueuedConnection);
-    connect(this, &UIFrameBufferPrivate::sigNotifyUpdate,
-            m_pMachineView, &UIMachineView::sltHandleNotifyUpdate,
+    connect(this, &UIFrameBufferPrivate::sigNotifyUpdatePending,
+            this, &UIFrameBufferPrivate::sltHandlePendingNotifyUpdate,
             Qt::QueuedConnection);
     connect(this, &UIFrameBufferPrivate::sigSetVisibleRegion,
             m_pMachineView, &UIMachineView::sltHandleSetVisibleRegion,
@@ -1240,8 +1255,8 @@ void UIFrameBufferPrivate::cleanupConnections()
     /* Detach EMT connections: */
     disconnect(this, &UIFrameBufferPrivate::sigNotifyChange,
                m_pMachineView, &UIMachineView::sltHandleNotifyChange);
-    disconnect(this, &UIFrameBufferPrivate::sigNotifyUpdate,
-               m_pMachineView, &UIMachineView::sltHandleNotifyUpdate);
+    disconnect(this, &UIFrameBufferPrivate::sigNotifyUpdatePending,
+               this, &UIFrameBufferPrivate::sltHandlePendingNotifyUpdate);
     disconnect(this, &UIFrameBufferPrivate::sigSetVisibleRegion,
                m_pMachineView, &UIMachineView::sltHandleSetVisibleRegion);
 
@@ -1264,6 +1279,57 @@ void UIFrameBufferPrivate::updateCoordinateSystem()
     /* Take the device-pixel-ratio into account: */
     if (useUnscaledHiDPIOutput())
         m_transform = m_transform.scale(1.0 / devicePixelRatio(), 1.0 / devicePixelRatio());
+}
+
+void UIFrameBufferPrivate::queueNotifyUpdate(ULONG uX, ULONG uY, ULONG uWidth, ULONG uHeight)
+{
+    const QRect rect((int)uX, (int)uY, (int)uWidth, (int)uHeight);
+    if (rect.isEmpty())
+        return;
+
+    m_pendingUpdateRectangles << rect;
+    if (!m_fNotifyUpdatePending)
+    {
+        m_fNotifyUpdatePending = true;
+        emit sigNotifyUpdatePending();
+    }
+}
+
+void UIFrameBufferPrivate::sltHandlePendingNotifyUpdate()
+{
+    if (!m_pMachineView)
+        return;
+
+    lock();
+
+    if (   m_fUnused
+        || m_pendingUpdateRectangles.isEmpty())
+    {
+        m_pendingUpdateRectangles.clear();
+        m_fNotifyUpdatePending = false;
+        unlock();
+        return;
+    }
+
+    const int cMaxUpdateRectanglesPerPass = 8;
+    QList<QRect> updateRectangles;
+    updateRectangles.reserve(cMaxUpdateRectanglesPerPass);
+    /* Keep the batch deliberately small.  Large Retina update bursts are cheaper
+     * as a few bounded viewport updates than as one huge Qt backing-store flush. */
+    while (   updateRectangles.size() < cMaxUpdateRectanglesPerPass
+           && !m_pendingUpdateRectangles.isEmpty())
+        updateRectangles << m_pendingUpdateRectangles.takeFirst();
+
+    const bool fHasMoreUpdates = !m_pendingUpdateRectangles.isEmpty();
+    m_fNotifyUpdatePending = fHasMoreUpdates;
+
+    unlock();
+
+    for (QList<QRect>::const_iterator it = updateRectangles.begin(); it != updateRectangles.end(); ++it)
+        m_pMachineView->sltHandleNotifyUpdate(it->x(), it->y(), it->width(), it->height());
+
+    if (fHasMoreUpdates)
+        emit sigNotifyUpdatePending();
 }
 
 void UIFrameBufferPrivate::paintDefault(QPaintEvent *pEvent)
@@ -1314,14 +1380,34 @@ void UIFrameBufferPrivate::paintDefault(QPaintEvent *pEvent)
     /* Take the device-pixel-ratio into account: */
     paintRectHiDPI.moveTo(paintRectHiDPI.topLeft() * devicePixelRatio());
     paintRectHiDPI.setSize(paintRectHiDPI.size() * devicePixelRatio());
+    const QRect requestedPaintRectHiDPI = paintRectHiDPI;
 
     /* Make sure hidpi paint rectangle is within the image boundary: */
     paintRectHiDPI &= pSourceImage->rect();
     if (paintRectHiDPI.isEmpty())
+    {
+#ifdef VBOX_WS_MAC
+        switch (m_pMachineView->visualStateType())
+        {
+            case UIVisualStateType_Normal:
+            case UIVisualStateType_Fullscreen:
+            case UIVisualStateType_Scale:
+            {
+                QPainter painter(m_pMachineView->viewport());
+                painter.fillRect(paintRect, QColor(Qt::black));
+                break;
+            }
+            default:
+                break;
+        }
+#endif /* VBOX_WS_MAC */
         return;
+    }
+    const bool fPaintRectFullyCovered = paintRectHiDPI == requestedPaintRectHiDPI;
 
     /* Create painter: */
     QPainter painter(m_pMachineView->viewport());
+    bool fUseSourceCompositionForImage = false;
 
     /* Depending on visual-state type: */
     switch (m_pMachineView->visualStateType())
@@ -1330,13 +1416,20 @@ void UIFrameBufferPrivate::paintDefault(QPaintEvent *pEvent)
         case UIVisualStateType_Fullscreen:
         case UIVisualStateType_Scale:
         {
-#ifdef VBOX_WS_MAC
+#if defined(VBOX_WS_MAC) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
             /* On OSX for Qt5 we need to fill the backing store first: */
             painter.setCompositionMode(QPainter::CompositionMode_Source);
             painter.fillRect(paintRect, QColor(Qt::black));
             painter.setCompositionMode(QPainter::CompositionMode_SourceAtop);
-#endif /* VBOX_WS_MAC */
+#elif defined(VBOX_WS_MAC)
+            /* Clear only newly exposed macOS backing-store regions.  Qt 6 handles steady-state
+             * dirty repaints without this fill, but resize/fullscreen transitions can otherwise
+             * leave the default gray backing-store color outside the current guest image. */
+            if (!fPaintRectFullyCovered)
+                painter.fillRect(paintRect, QColor(Qt::black));
+#endif /* VBOX_WS_MAC && Qt < 6 */
 
+            fUseSourceCompositionForImage = true;
             break;
         }
         case UIVisualStateType_Seamless:
@@ -1357,12 +1450,12 @@ void UIFrameBufferPrivate::paintDefault(QPaintEvent *pEvent)
             painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
             unlock();
 
-#ifdef VBOX_WITH_TRANSLUCENT_SEAMLESS
+#if defined(VBOX_WITH_TRANSLUCENT_SEAMLESS) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
             /* In case of translucent seamless for Qt5 we need to fill the backing store first: */
             painter.setCompositionMode(QPainter::CompositionMode_Source);
             painter.fillRect(paintRect, QColor(Qt::black));
             painter.setCompositionMode(QPainter::CompositionMode_SourceAtop);
-#endif /* VBOX_WITH_TRANSLUCENT_SEAMLESS */
+#endif /* VBOX_WITH_TRANSLUCENT_SEAMLESS && Qt < 6 */
 
             break;
         }
@@ -1371,9 +1464,13 @@ void UIFrameBufferPrivate::paintDefault(QPaintEvent *pEvent)
     }
 
     /* Draw hidpi image rectangle: */
+    if (fUseSourceCompositionForImage)
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
     drawImageRect(painter, *pSourceImage, paintRectHiDPI,
                   m_pMachineView->contentsX(), m_pMachineView->contentsY(),
                   devicePixelRatio());
+    if (fUseSourceCompositionForImage)
+        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
 
     /* If we had to scale image for some reason: */
     if (   scaledSize().isValid()
@@ -1441,31 +1538,25 @@ void UIFrameBufferPrivate::drawImageRect(QPainter &painter, const QImage &image,
                                          int iContentsShiftX, int iContentsShiftY,
                                          double dDevicePixelRatio)
 {
-    /* Calculate offset: */
-    const size_t offset = (rect.x() + iContentsShiftX) * image.depth() / 8 +
-                          (rect.y() + iContentsShiftY) * image.bytesPerLine();
-
     /* Restrain boundaries: */
     const int iSubImageWidth = qMin(rect.width(), image.width() - rect.x() - iContentsShiftX);
     const int iSubImageHeight = qMin(rect.height(), image.height() - rect.y() - iContentsShiftY);
+    if (   iSubImageWidth <= 0
+        || iSubImageHeight <= 0)
+        return;
 
-    /* Create sub-image (no copy involved): */
-    QImage subImage = QImage(image.bits() + offset,
-                             iSubImageWidth, iSubImageHeight,
-                             image.bytesPerLine(), image.format());
-
-    /* Create sub-pixmap on the basis of sub-image above (1st copy involved): */
-    QPixmap subPixmap = QPixmap::fromImage(subImage);
-    /* Take the device-pixel-ratio into account: */
-    subPixmap.setDevicePixelRatio(dDevicePixelRatio);
-
-    /* Which point we should draw corresponding sub-pixmap? */
+    /* Which point we should draw the image at? */
     QPoint paintPoint = rect.topLeft();
     /* Take the device-pixel-ratio into account: */
     paintPoint /= dDevicePixelRatio;
 
-    /* Draw sub-pixmap: */
-    painter.drawPixmap(paintPoint, subPixmap);
+    /* Draw directly from the source image to avoid materializing a temporary pixmap for every update rectangle. */
+    const QRect sourceRect(rect.x() + iContentsShiftX, rect.y() + iContentsShiftY,
+                           iSubImageWidth, iSubImageHeight);
+    const QRectF targetRect(QPointF(paintPoint),
+                            QSizeF((double)iSubImageWidth / dDevicePixelRatio,
+                                   (double)iSubImageHeight / dDevicePixelRatio));
+    painter.drawImage(targetRect, image, sourceRect);
 }
 
 /* static */

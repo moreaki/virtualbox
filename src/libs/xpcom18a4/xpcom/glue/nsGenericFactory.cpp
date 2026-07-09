@@ -374,6 +374,16 @@ nsGenericModule::GetClassObject(nsIComponentManager *aCompMgr,
     const nsModuleComponentInfo* desc = mComponents;
     for (PRUint32 i = 0; i < mComponentCount; i++) {
         if (desc->mCID.Equals(aClass)) {
+            if (aIID.Equals(NS_GET_IID(nsIFactory))) {
+                nsGenericFactory *fact = new nsGenericFactory(desc);
+                if (!fact)
+                    return NS_ERROR_OUT_OF_MEMORY;
+                nsIFactory *pFactory = NS_STATIC_CAST(nsIFactory *, fact);
+                NS_ADDREF(pFactory);
+                *r_classObj = pFactory;
+                return NS_OK;
+            }
+
             nsCOMPtr<nsIGenericFactory> fact;
             rv = NS_NewGenericFactory(getter_AddRefs(fact), desc);
             if (NS_FAILED(rv)) return rv;

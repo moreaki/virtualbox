@@ -764,22 +764,38 @@ void UIMachineView::sltHandleNotifyChange(int iWidth, int iHeight)
 
 void UIMachineView::sltHandleNotifyUpdate(int iX, int iY, int iWidth, int iHeight)
 {
-    /* Sanity check: */
-    if (!frameBuffer())
+    /* Prepare corresponding viewport part: */
+    const QRect rect = viewportRectangleForGuestUpdate(QRect(iX, iY, iWidth, iHeight));
+    if (rect.isEmpty())
         return;
 
-    /* Prepare corresponding viewport part: */
-    QRect rect(iX, iY, iWidth, iHeight);
+    /* Update corresponding viewport part: */
+    viewport()->update(rect);
+}
+
+QRect UIMachineView::viewportRectangleForGuestUpdate(const QRect &guestRect)
+{
+    /* Sanity check: */
+    if (!frameBuffer())
+        return QRect();
+
+    QRect rect = guestRect;
 
     /* Take the scaling into account: */
     const double dScaleFactor = frameBuffer()->scaleFactor();
     const QSize scaledSize = frameBuffer()->scaledSize();
     if (scaledSize.isValid())
     {
+        const bool fUseExplicitScaledSize =
+               visualStateType() == UIVisualStateType_Scale
+#ifdef VBOX_WS_MAC
+            || visualStateType() == UIVisualStateType_Fullscreen
+#endif
+            ;
         /* Calculate corresponding scale-factors: */
-        const double xScaleFactor = visualStateType() == UIVisualStateType_Scale ?
+        const double xScaleFactor = fUseExplicitScaledSize ?
                                     (double)scaledSize.width()  / frameBuffer()->width()  : dScaleFactor;
-        const double yScaleFactor = visualStateType() == UIVisualStateType_Scale ?
+        const double yScaleFactor = fUseExplicitScaledSize ?
                                     (double)scaledSize.height() / frameBuffer()->height() : dScaleFactor;
         /* Adjust corresponding viewport part: */
         rect.moveTo((int)floor((double)rect.x() * xScaleFactor) - 1,
@@ -804,11 +820,7 @@ void UIMachineView::sltHandleNotifyUpdate(int iX, int iY, int iWidth, int iHeigh
 
     /* Limit the resulting part by the viewport rectangle: */
     rect &= viewport()->rect();
-    if (rect.isEmpty())
-        return;
-
-    /* Update corresponding viewport part: */
-    viewport()->update(rect);
+    return rect;
 }
 
 void UIMachineView::sltHandleSetVisibleRegion(QRegion region)
@@ -1253,8 +1265,12 @@ void UIMachineView::prepareViewport()
     /* Prepare viewport: */
     AssertPtrReturnVoid(viewport());
     {
-        /* Enable manual painting: */
+        /* The framebuffer paints the requested update itself; avoid widget-level
+         * background fills and let Qt preserve static contents where possible. */
+        viewport()->setAutoFillBackground(false);
         viewport()->setAttribute(Qt::WA_OpaquePaintEvent);
+        viewport()->setAttribute(Qt::WA_NoSystemBackground);
+        viewport()->setAttribute(Qt::WA_StaticContents);
         /* Enable multi-touch support: */
         viewport()->setAttribute(Qt::WA_AcceptTouchEvents);
     }

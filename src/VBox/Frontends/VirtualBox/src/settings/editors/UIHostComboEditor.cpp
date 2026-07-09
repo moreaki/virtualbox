@@ -147,19 +147,19 @@ QString UINativeHotKey::toString(int iKeyCode)
     {
         case shiftKey:
         case rightShiftKey:
-            strKeyName = strKeyName.arg(QChar(kShiftUnicode));
+            strKeyName = strKeyName.arg(QChar(char16_t(kShiftUnicode)));
             break;
         case optionKey:
         case rightOptionKey:
-            strKeyName = strKeyName.arg(QChar(kOptionUnicode));
+            strKeyName = strKeyName.arg(QChar(char16_t(kOptionUnicode)));
             break;
         case controlKey:
         case rightControlKey:
-            strKeyName = strKeyName.arg(QChar(kControlUnicode));
+            strKeyName = strKeyName.arg(QChar(char16_t(kControlUnicode)));
             break;
         case cmdKey:
         case kEventKeyModifierRightCmdKeyMask:
-            strKeyName = strKeyName.arg(QChar(kCommandUnicode));
+            strKeyName = strKeyName.arg(QChar(char16_t(kCommandUnicode)));
             break;
     }
 

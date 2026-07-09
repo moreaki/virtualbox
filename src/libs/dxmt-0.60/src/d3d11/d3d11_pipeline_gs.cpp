@@ -13,9 +13,10 @@ public:
   MTLCompiledGeometryPipeline(MTLD3D11Device *pDevice,
                               const MTL_GRAPHICS_PIPELINE_DESC *pDesc)
       : ComObject<IMTLCompiledGeometryPipeline>(),
-        num_rtvs(pDesc->NumColorAttachments),
-        depth_stencil_format(pDesc->DepthStencilFormat), device_(pDevice),
-        pBlendState(pDesc->BlendState),
+	        num_rtvs(pDesc->NumColorAttachments),
+	        depth_stencil_format(pDesc->DepthStencilFormat), device_(pDevice),
+	        ready_(false),
+	        pBlendState(pDesc->BlendState),
         RasterizationEnabled(pDesc->RasterizationEnabled),
         SampleCount(pDesc->SampleCount) {
     uint32_t unorm_output_reg_mask = 0;

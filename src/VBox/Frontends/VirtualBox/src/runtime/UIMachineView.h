@@ -381,6 +381,8 @@ protected:
     QSize scaledForward(QSize size) const;
     /** Scales passed size backward. */
     QSize scaledBackward(QSize size) const;
+    /** Converts a guest dirty rectangle to a viewport dirty rectangle. */
+    QRect viewportRectangleForGuestUpdate(const QRect &rect);
 
     /** Updates mouse pointer @a pixmap, @a iXHot and @a iYHot according to scaling attributes. */
     void updateMousePointerPixmapScaling(QPixmap &pixmap, int &iXHot, int &iYHot);

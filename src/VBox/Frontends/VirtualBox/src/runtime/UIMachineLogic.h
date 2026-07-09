@@ -407,6 +407,7 @@ private:
     QActionGroup *m_pDockPreviewSelectMonitorGroup;
     QAction *m_pDockSettingsMenuSeparator;
     int m_DockIconPreviewMonitor;
+    uint64_t m_u64LastDockIconUpdateMs;
     QAction *m_pDockSettingMenuAction;
     /* Keeps a list of machine menu actions that we add to dock menu. */
     QList<QAction*> m_dockMachineMenuActions;

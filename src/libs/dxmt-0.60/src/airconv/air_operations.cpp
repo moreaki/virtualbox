@@ -1,6 +1,19 @@
 #include "air_operations.hpp"
+#include "llvm/Config/llvm-config.h"
+#if LLVM_VERSION_MAJOR >= 16
+# include "llvm/Support/ModRef.h"
+#endif
 
 namespace dxmt::air {
+
+static llvm::Attribute
+get_argmemonly_attribute(llvm::LLVMContext &context) {
+#if LLVM_VERSION_MAJOR >= 16
+  return llvm::Attribute::getWithMemoryEffects(context, llvm::MemoryEffects::argMemOnly());
+#else
+  return llvm::Attribute::get(context, llvm::Attribute::AttrKind::ArgMemOnly);
+#endif
+}
 
 std::string
 type_overload_suffix(llvm::Type *type, Sign sign = Sign::inapplicable) {
@@ -501,7 +514,7 @@ AIRBuilderResult call_sample(
       {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
       {2U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
       {2U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
-      {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+      {~0U, get_argmemonly_attribute(context)},
       {~0U, Attribute::get(context, Attribute::AttrKind::Convergent)},
       {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
       {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
@@ -592,7 +605,7 @@ AIRBuilderResult call_sample_grad(
       {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
       {2U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
       {2U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
-      {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+      {~0U, get_argmemonly_attribute(context)},
       {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
       {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
       {~0U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
@@ -674,7 +687,7 @@ AIRBuilderResult call_sample_compare(
       {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
       {2U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
       {2U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
-      {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+      {~0U, get_argmemonly_attribute(context)},
       {~0U, Attribute::get(context, Attribute::AttrKind::Convergent)},
       {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
       {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
@@ -771,7 +784,7 @@ AIRBuilderResult call_gather(
       {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
       {2U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
       {2U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
-      {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+      {~0U, get_argmemonly_attribute(context)},
       {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
       {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
       {~0U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
@@ -848,7 +861,7 @@ AIRBuilderResult call_gather_compare(
       {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
       {2U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
       {2U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
-      {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+      {~0U, get_argmemonly_attribute(context)},
       {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
       {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
       {~0U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
@@ -921,7 +934,7 @@ AIRBuilderResult call_read(
     {
       {1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
       {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
-      {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+      {~0U, get_argmemonly_attribute(context)},
       {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
       {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
       {~0U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
@@ -1007,7 +1020,7 @@ AIRBuilderResult call_write(
     context,
     {
       {1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
-      {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+      {~0U, get_argmemonly_attribute(context)},
       {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
       {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
     }
@@ -1077,7 +1090,7 @@ AIRBuilderResult call_calc_lod(
       {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
       {2U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
       {2U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
-      {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+      {~0U, get_argmemonly_attribute(context)},
       {~0U, Attribute::get(context, Attribute::AttrKind::Convergent)},
       {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
       {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
@@ -1125,7 +1138,7 @@ AIRBuilderResult call_get_texture_info(
     {
       {1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
       {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
-      {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+      {~0U, get_argmemonly_attribute(context)},
       {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
       {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
       {~0U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
@@ -2023,7 +2036,7 @@ call_set_mesh_properties(pvalue mesh_grid_props, pvalue grid_size) {
       {{1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
        {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
        {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-       {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+       {~0U, get_argmemonly_attribute(context)},
        {~0U, Attribute::get(context, Attribute::AttrKind::MustProgress)}}
     );
     auto fn = (module.getOrInsertFunction(
@@ -2049,7 +2062,7 @@ call_interpolate_at_center(pvalue interpolant, bool perspective) {
                 {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+                {~0U, get_argmemonly_attribute(context)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::ReadOnly)}}
     );
     auto fn = (module.getOrInsertFunction(
@@ -2075,7 +2088,7 @@ call_interpolate_at_centroid(pvalue interpolant, bool perspective) {
                 {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+                {~0U, get_argmemonly_attribute(context)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::ReadOnly)}}
     );
     auto fn = (module.getOrInsertFunction(
@@ -2102,7 +2115,7 @@ AIRBuilderResult call_interpolate_at_offset(
                 {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)},
+                {~0U, get_argmemonly_attribute(context)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::ReadOnly)}}
     );
     auto fn = (module.getOrInsertFunction(
@@ -2129,7 +2142,7 @@ call_interpolate_at_sample(pvalue interpolant, bool perspective, pvalue index) {
                 {1U, Attribute::get(context, Attribute::AttrKind::ReadOnly)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                 {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)}}
+                {~0U, get_argmemonly_attribute(context)}}
     );
     auto fn = (module.getOrInsertFunction(
       perspective ? "air.interpolate_sample_perspective.v4f32"
@@ -2154,7 +2167,7 @@ call_set_mesh_render_target_array_index(pvalue mesh, pvalue vid, pvalue render_t
         context, {{1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                  {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)}}
+                  {~0U, get_argmemonly_attribute(context)}}
     );
     auto fn = (module.getOrInsertFunction(
         "air.set_render_target_array_index_mesh.i32",
@@ -2177,7 +2190,7 @@ AIRBuilderResult call_set_mesh_viewport_array_index(pvalue mesh, pvalue vid, pva
         context, {{1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                  {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)}}
+                  {~0U, get_argmemonly_attribute(context)}}
     );
     auto fn = (module.getOrInsertFunction(
         "air.set_viewport_array_index_mesh.i32",
@@ -2200,7 +2213,7 @@ AIRBuilderResult call_set_mesh_position(pvalue mesh, pvalue vid, pvalue position
         context, {{1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                  {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)}}
+                  {~0U, get_argmemonly_attribute(context)}}
     );
     auto fn = (module.getOrInsertFunction(
         "air.set_position_mesh",
@@ -2223,7 +2236,7 @@ AIRBuilderResult call_set_mesh_clip_distance(pvalue mesh, uint32_t idx, pvalue v
         context, {{1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                  {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)}}
+                  {~0U, get_argmemonly_attribute(context)}}
     );
     auto fn = (module.getOrInsertFunction(
         "air.set_clip_distance_mesh",
@@ -2247,7 +2260,7 @@ call_set_mesh_vertex_data(pvalue mesh, uint32_t idx, pvalue vid, pvalue value) {
         context, {{1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                  {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)}}
+                  {~0U, get_argmemonly_attribute(context)}}
     );
     auto fn = (module.getOrInsertFunction(
         "air.set_vertex_data_mesh" + type_overload_suffix(value->getType()),
@@ -2271,7 +2284,7 @@ call_set_mesh_primitive_data(pvalue mesh, uint32_t idx, pvalue pid, pvalue value
         context, {{1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                  {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)}}
+                  {~0U, get_argmemonly_attribute(context)}}
     );
     auto fn = (module.getOrInsertFunction(
         "air.set_primitive_data_mesh" + type_overload_suffix(value->getType()),
@@ -2294,7 +2307,7 @@ AIRBuilderResult call_set_mesh_index(pvalue mesh, pvalue index, pvalue vertex) {
         context, {{1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                  {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)}}
+                  {~0U, get_argmemonly_attribute(context)}}
     );
     auto fn = (module.getOrInsertFunction(
         "air.set_index_mesh",
@@ -2317,7 +2330,7 @@ AIRBuilderResult call_set_mesh_primitive_count(pvalue mesh, pvalue count) {
         context, {{1U, Attribute::get(context, Attribute::AttrKind::NoCapture)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::NoUnwind)},
                   {~0U, Attribute::get(context, Attribute::AttrKind::WillReturn)},
-                  {~0U, Attribute::get(context, Attribute::AttrKind::ArgMemOnly)}}
+                  {~0U, get_argmemonly_attribute(context)}}
     );
     auto fn = (module.getOrInsertFunction(
         "air.set_primitive_count_mesh",

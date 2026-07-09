@@ -94,20 +94,14 @@ uint32_t next_pow2(uint32_t x) {
   return x == 1 ? 1 : 1 << (32 - __builtin_clz(x - 1));
 }
 
-auto get_item_in_argbuf_binding_table(uint32_t argbuf_index, uint32_t index) {
+auto get_item_in_argbuf_binding_table(
+  uint32_t argbuf_index, llvm::StructType *argbuf_struct_type, uint32_t index
+) {
   return make_irvalue([=](context ctx) {
     auto argbuf = ctx.function->getArg(argbuf_index);
-    auto argbuf_struct_type = llvm::cast<llvm::StructType>(
-      llvm::cast<llvm::PointerType>(argbuf->getType())
-        ->getNonOpaquePointerElementType()
-    );
     return ctx.builder.CreateLoad(
       argbuf_struct_type->getElementType(index),
-      ctx.builder.CreateStructGEP(
-        llvm::cast<llvm::PointerType>(argbuf->getType())
-          ->getNonOpaquePointerElementType(),
-        argbuf, index
-      )
+      ctx.builder.CreateStructGEP(argbuf_struct_type, argbuf, index)
     );
   });
 };
@@ -118,10 +112,13 @@ void setup_binding_table(
 ) {
   uint32_t binding_table_index = ~0u;
   uint32_t cbuf_table_index = ~0u;
+  llvm::StructType *binding_table_type = nullptr;
+  llvm::StructType *cbuf_table_type = nullptr;
   if (!shader_info->binding_table.Empty()) {
     auto [type, metadata] = shader_info->binding_table.Build(
       module.getContext(), module.getDataLayout()
     );
+    binding_table_type = type;
     binding_table_index =
       func_signature.DefineInput(air::ArgumentBindingIndirectBuffer{
         .location_index = 30, // kArgumentBufferBindIndex
@@ -137,6 +134,7 @@ void setup_binding_table(
     auto [type, metadata] = shader_info->binding_table_cbuffer.Build(
       module.getContext(), module.getDataLayout()
     );
+    cbuf_table_type = type;
     cbuf_table_index =
       func_signature.DefineInput(air::ArgumentBindingIndirectBuffer{
         .location_index = 29, // kConstantBufferBindIndex
@@ -154,21 +152,21 @@ void setup_binding_table(
     auto index = cbv.arg_index;
     resource_map.cb_range_map[range_id] = [=](pvalue) {
       // ignore index in SM 5.0
-      return get_item_in_argbuf_binding_table(cbuf_table_index, index);
+      return get_item_in_argbuf_binding_table(cbuf_table_index, cbuf_table_type, index);
     };
   }
   for (auto &[range_id, sampler] : shader_info->samplerMap) {
     // TODO: abstract SM 5.0 binding
-    resource_map.sampler_range_map[range_id] = {
-      [=, index = sampler.arg_index](pvalue) {
-        // ignore index in SM 5.0
-        return get_item_in_argbuf_binding_table(binding_table_index, index);
-      },
-      [=, index = sampler.arg_metadata_index](pvalue) {
-        // ignore index in SM 5.0
-        return get_item_in_argbuf_binding_table(binding_table_index, index);
-      }
-    };
+      resource_map.sampler_range_map[range_id] = {
+        [=, index = sampler.arg_index](pvalue) {
+          // ignore index in SM 5.0
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
+        },
+        [=, index = sampler.arg_metadata_index](pvalue) {
+          // ignore index in SM 5.0
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
+        }
+      };
   }
   for (auto &[range_id, srv] : shader_info->srvMap) {
     if (srv.resource_type != shader::common::ResourceType::NonApplicable) {
@@ -186,21 +184,21 @@ void setup_binding_table(
         },
         [=, index = srv.arg_index](pvalue) {
           // ignore index in SM 5.0
-          return get_item_in_argbuf_binding_table(binding_table_index, index);
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
         },
         [=, index = srv.arg_metadata_index](pvalue) {
           // ignore index in SM 5.0
-          return get_item_in_argbuf_binding_table(binding_table_index, index);
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
         }
       };
     } else {
       resource_map.srv_buf_range_map[range_id] = {
         srv.strucure_stride,
         [=, index = srv.arg_index](pvalue) {
-          return get_item_in_argbuf_binding_table(binding_table_index, index);
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
         },
         [=, index = srv.arg_metadata_index](pvalue) {
-          return get_item_in_argbuf_binding_table(binding_table_index, index);
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
         }
       };
     }
@@ -221,28 +219,28 @@ void setup_binding_table(
         },
         [=, index = uav.arg_index](pvalue) {
           // ignore index in SM 5.0
-          return get_item_in_argbuf_binding_table(binding_table_index, index);
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
         },
         [=, index = uav.arg_metadata_index](pvalue) {
           // ignore index in SM 5.0
-          return get_item_in_argbuf_binding_table(binding_table_index, index);
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
         }
       };
     } else {
       resource_map.uav_buf_range_map[range_id] = {
         uav.strucure_stride,
         [=, index = uav.arg_index](pvalue) {
-          return get_item_in_argbuf_binding_table(binding_table_index, index);
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
         },
         [=, index = uav.arg_metadata_index](pvalue) {
-          return get_item_in_argbuf_binding_table(binding_table_index, index);
+          return get_item_in_argbuf_binding_table(binding_table_index, binding_table_type, index);
         }
       };
       if (uav.with_counter) {
         auto argbuf_index_counterptr = uav.arg_counter_index;
         resource_map.uav_counter_range_map[range_id] = [=](pvalue) {
           return get_item_in_argbuf_binding_table(
-            binding_table_index, argbuf_index_counterptr
+            binding_table_index, binding_table_type, argbuf_index_counterptr
           );
         };
       }
@@ -694,8 +692,7 @@ llvm::Error convert_dxbc_hull_shader(
     auto pc_scalar = pShaderInternal->patch_constant_scalars[i];
     auto dst_ptr = builder.CreateConstGEP1_32(types._int, pc_out, i);
     auto src_ptr = builder.CreateGEP(
-      resource_map.patch_constant_output.ptr_int4->getType()
-        ->getNonOpaquePointerElementType(),
+      llvm::ArrayType::get(types._int4, max_patch_constant_output_register),
       resource_map.patch_constant_output.ptr_int4,
       {builder.getInt32(0), builder.getInt32(pc_scalar.reg),
        builder.getInt32(pc_scalar.component)}
@@ -962,8 +959,7 @@ llvm::Error convert_dxbc_domain_shader(
     unsigned clip_distance_idx = 0;
     for (auto &scalar : pShaderInternal->clip_distance_scalars) {
       auto src_ptr = builder.CreateGEP(
-        resource_map.output.ptr_float4->getType()
-          ->getNonOpaquePointerElementType(),
+        llvm::ArrayType::get(types._float4, 1),
         resource_map.output.ptr_float4,
         {builder.getInt32(0), builder.getInt32(scalar.reg),
          builder.getInt32(scalar.component)}
@@ -982,8 +978,7 @@ llvm::Error convert_dxbc_domain_shader(
   } else {
     if (rta_idx_out != ~0u) {
       auto src_ptr = builder.CreateGEP(
-        resource_map.output.ptr_int4->getType()->getNonOpaquePointerElementType(
-        ),
+        llvm::ArrayType::get(types._int4, 1),
         resource_map.output.ptr_int4,
         {builder.getInt32(0),
          builder.getInt32(gs_passthrough->RenderTargetArrayIndexReg),
@@ -995,8 +990,7 @@ llvm::Error convert_dxbc_domain_shader(
     }
     if (va_idx_out != ~0u) {
       auto src_ptr = builder.CreateGEP(
-        resource_map.output.ptr_int4->getType()->getNonOpaquePointerElementType(
-        ),
+        llvm::ArrayType::get(types._int4, 1),
         resource_map.output.ptr_int4,
         {builder.getInt32(0),
          builder.getInt32(gs_passthrough->ViewportArrayIndexReg),
@@ -1462,8 +1456,7 @@ llvm::Error convert_dxbc_vertex_shader(
     unsigned clip_distance_idx = 0;
     for (auto &scalar : pShaderInternal->clip_distance_scalars) {
       auto src_ptr = builder.CreateGEP(
-        resource_map.output.ptr_float4->getType()
-          ->getNonOpaquePointerElementType(),
+        llvm::ArrayType::get(types._float4, 1),
         resource_map.output.ptr_float4,
         {builder.getInt32(0), builder.getInt32(scalar.reg),
          builder.getInt32(scalar.component)}
@@ -1482,8 +1475,7 @@ llvm::Error convert_dxbc_vertex_shader(
   } else {
     if (rta_idx_out != ~0u) {
       auto src_ptr = builder.CreateGEP(
-        resource_map.output.ptr_int4->getType()->getNonOpaquePointerElementType(
-        ),
+        llvm::ArrayType::get(types._int4, 1),
         resource_map.output.ptr_int4,
         {builder.getInt32(0),
          builder.getInt32(gs_passthrough->RenderTargetArrayIndexReg),
@@ -1495,8 +1487,7 @@ llvm::Error convert_dxbc_vertex_shader(
     }
     if (va_idx_out != ~0u) {
       auto src_ptr = builder.CreateGEP(
-        resource_map.output.ptr_int4->getType()->getNonOpaquePointerElementType(
-        ),
+        llvm::ArrayType::get(types._int4, 1),
         resource_map.output.ptr_int4,
         {builder.getInt32(0),
          builder.getInt32(gs_passthrough->ViewportArrayIndexReg),
@@ -1679,7 +1670,7 @@ llvm::Error convert_dxbc_vertex_for_hull_shader(
                    ->getPointerTo((uint32_t)air::AddressSpace::object_data)
   );
   resource_map.output.ptr_int4 = builder.CreateGEP(
-    resource_map.output.ptr_int4->getType()->getNonOpaquePointerElementType(),
+    llvm::ArrayType::get(types._int4, max_output_register),
     resource_map.output.ptr_int4, {control_point_index_in_threadgroup}
   );
   resource_map.output.ptr_float4 = builder.CreateBitCast(
@@ -1687,7 +1678,7 @@ llvm::Error convert_dxbc_vertex_for_hull_shader(
                    ->getPointerTo((uint32_t)air::AddressSpace::object_data)
   );
   resource_map.output.ptr_float4 = builder.CreateGEP(
-    resource_map.output.ptr_float4->getType()->getNonOpaquePointerElementType(),
+    llvm::ArrayType::get(types._float4, max_output_register),
     resource_map.output.ptr_float4, {control_point_index_in_threadgroup}
   );
 
@@ -1720,7 +1711,7 @@ llvm::Error convert_dxbc_vertex_for_hull_shader(
     auto start_index = builder.CreateExtractValue(draw_arguments, 2);
     auto index_buffer = function->getArg(index_buffer_idx);
     auto index_buffer_element_type =
-      index_buffer->getType()->getNonOpaquePointerElementType();
+      ia_layout->index_buffer_format == 1 ? types._short : types._int;
     auto vertex_id = builder.CreateLoad(
       index_buffer_element_type,
       builder.CreateGEP(
